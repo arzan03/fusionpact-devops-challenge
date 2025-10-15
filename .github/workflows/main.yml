@@ -150,8 +150,8 @@ jobs:
               cd fusionpact-devops-challenge
               git pull origin main
             fi
-            docker-compose pull
-            docker-compose up -d --force-recreate
+            docker compose pull
+            docker compose up -d --force-recreate
             docker system prune -af
 
       - name: Verify Deployment
@@ -176,3 +176,4 @@ jobs:
           else
             echo "❌ Deployment failed!"
           fi
+
