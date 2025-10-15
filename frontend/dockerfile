@@ -1,0 +1,10 @@
+FROM nginx:alpine
+
+# Copy HTML file to Nginx html directory
+COPY Devops_Intern.html /usr/share/nginx/html/index.html
+
+# Expose port 80
+EXPOSE 80
+
+# start Nginx
+CMD ["nginx", "-g", "daemon off;"]

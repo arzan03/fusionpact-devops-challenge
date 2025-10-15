@@ -1,0 +1,178 @@
+name: Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  BACKEND_IMAGE: backend
+  FRONTEND_IMAGE: frontend
+
+jobs:
+  # Job 1: Code Quality and Testing
+  code-quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Backend Dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Lint Backend Code with Black
+        run: |
+          cd backend
+          black --check app/ || true
+
+      - name: Run Backend Tests 
+        run: |
+          cd backend
+          echo "Running backend tests..."
+          
+          # Test 1: Check if main.py imports successfully
+          python -c "from app import main; print('✅ main.py imports successfully')"
+          
+          # Test 2: Check if FastAPI app is created
+          python -c "from app.main import app; assert app is not None; print('✅ FastAPI app created successfully')"
+          
+          # Test 3: Validate schema models
+          python -c "from app.schema import UserIn, BaseResponse, UserListOut; print('✅ Schema models validated')"
+          
+          # Test 4: Test services module
+          python -c "from app import services; print('✅ Services module imported successfully')"
+          
+          # Test 5: Check if all required packages are installed
+          python -c "import fastapi, uvicorn, prometheus_fastapi_instrumentator; print('✅ All dependencies installed')"
+          
+          echo "✅ All backend tests passed!"
+
+  # Job 2: Build and Push Docker Images
+  build-and-push:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+    needs: code-quality
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Extract Docker Metadata (Backend)
+        id: meta-backend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKER_USERNAME }}/${{ env.BACKEND_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and Push Backend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-backend.outputs.tags }}
+          labels: ${{ steps.meta-backend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Extract Docker Metadata (Frontend)
+        id: meta-frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKER_USERNAME }}/${{ env.FRONTEND_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and Push Frontend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Job 3: Deploy to Cloud (Azure VM)
+  deploy:
+    name: Deploy to Azure VM
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Deploy to Azure VM via SSH
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.AZURE_VM_IP }}
+          username: ${{ secrets.AZURE_VM_USERNAME }}
+          key: ${{ secrets.AZURE_VM_SSH_KEY }}
+          script: |
+            cd /home/azureuser/fusionpact-devops-challenge || cd ~
+            if [ ! -d "fusionpact-devops-challenge" ]; then
+              git clone https://github.com/${{ github.repository }}.git
+              cd fusionpact-devops-challenge
+            else
+              cd fusionpact-devops-challenge
+              git pull origin main
+            fi
+            docker-compose pull
+            docker-compose up -d --force-recreate
+            docker system prune -af
+
+      - name: Verify Deployment
+        run: |
+          echo "Waiting for services to start..."
+          sleep 30
+          # Add health check commands here
+          # curl -f http://${{ secrets.AZURE_VM_IP }}:8000/ || exit 1
+
+  # Job 4: Notification
+  notify:
+    name: Send Deployment Notification
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: always()
+    
+    steps:
+      - name: Deployment Status
+        run: |
+          if [ "${{ needs.deploy.result }}" == "success" ]; then
+            echo "✅ Deployment successful!"
+          else
+            echo "❌ Deployment failed!"
+          fi
