@@ -142,7 +142,7 @@ jobs:
           username: ${{ secrets.AZURE_VM_USERNAME }}
           key: ${{ secrets.AZURE_VM_SSH_KEY }}
           script: |
-            cd /home/azureuser/fusionpact-devops-challenge || cd ~
+            cd /home/${{ secrets.AZURE_VM_USERNAME }}/fusionpact-devops-challenge || cd ~
             if [ ! -d "fusionpact-devops-challenge" ]; then
               git clone https://github.com/${{ github.repository }}.git
               cd fusionpact-devops-challenge
